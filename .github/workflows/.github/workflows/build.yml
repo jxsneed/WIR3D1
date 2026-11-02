@@ -1,0 +1,81 @@
+name: Build wir3d VST3
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ "v*.*.*", "v*.*" ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch: # Permite compilar manualmente con un clic en GitHub
+
+jobs:
+  build:
+    name: Build on ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            artifact-name: wir3d-windows-vst3
+            cmake-args: -G "Visual Studio 17 2022" -A x64
+
+          - name: macOS
+            os: macos-latest
+            artifact-name: wir3d-macos-universal-vst3
+            cmake-args: -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+          - name: Linux
+            os: ubuntu-22.04
+            artifact-name: wir3d-linux-vst3
+            cmake-args: -DCMAKE_BUILD_TYPE=Release
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux audio dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-jackd2-dev \
+            ladspa-sdk libfreetype6-dev libx11-dev libxcomposite-dev \
+            libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev \
+            libxrender-dev libglu1-mesa-dev mesa-common-dev
+
+      - name: Configure CMake
+        run: cmake -B build -S . ${{ matrix.cmake-args }}
+
+      - name: Build VST3 and Standalone
+        run: cmake --build build --config Release --parallel 2
+
+      # Empaquetar Windows
+      - name: Package Windows VST3
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/windows | Out-Null
+          Get-ChildItem -Path build -Recurse -Filter "wir3d.vst3" | Select-Object -First 1 | ForEach-Object {
+            Copy-Item -Recurse $_.FullName dist/windows/
+          }
+          Get-ChildItem -Path build -Recurse -Filter "wir3d.exe" | Select-Object -First 1 | ForEach-Object {
+            Copy-Item $_.FullName dist/windows/
+          }
+          Copy-Item README.md, LICENSE dist/windows/
+
+      # Empaquetar macOS
+      - name: Package macOS VST3
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist/macos
+          find build -name "wir3d.vst3" -type d -exec cp -R {} dist/macos/ \;
+          find build -name "wir3d.app" -type d -exec cp -R {} dist/macos/ \; 2>/dev/null || true
+          cp README.md LICENSE dist/macos/
+
+      # Empaquetar Linux
+      - name: Package Linux VST3
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist/linux
+          find build -name "wir3d.vst3" -type d -exec cp -R {} dist/linux/
